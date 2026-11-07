@@ -6,7 +6,13 @@ import SwiftWebUICore
 final class ProjectModel {
     private(set) var project: Project?
     private(set) var tree: [FileNode] = []
-    var selection: URL?
+    var selection: URL? { didSet { if selection != oldValue { openSession() } } }
+    /// The open file's editing session, or nil when nothing editable is selected.
+    private(set) var session: OpenFileSession?
+    /// Set when the open file changed on disk while it has unsaved edits.
+    var conflictFileName: String?
+    /// Non-nil when the selected file cannot be opened as text.
+    private(set) var openError: String?
     var errorMessage: String?
     /// Item currently being renamed inline, or a pending new item name prompt.
     var renaming: URL?
@@ -46,7 +52,43 @@ final class ProjectModel {
     func close() {
         watcher?.stop(); watcher = nil
         accessedRoot?.stopAccessingSecurityScopedResource(); accessedRoot = nil
-        project = nil; tree = []; selection = nil
+        saveCurrent()
+        project = nil; tree = []; selection = nil; session = nil
+    }
+
+    // MARK: Editor session
+
+    /// Saves any pending edits in the open file.
+    func saveCurrent() { session?.save() }
+
+    private func openSession() {
+        session?.save()
+        session = nil
+        openError = nil
+        conflictFileName = nil
+        guard let url = selection else { return }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { return }
+        do {
+            let s = try OpenFileSession(url: url)
+            s.onSaveError = { [weak self] in self?.report($0) }
+            s.onExternalChange = { [weak self] change in
+                guard let self else { return }
+                switch change {
+                case .conflict: self.conflictFileName = url.lastPathComponent
+                case .deleted: break // reload() clears the selection
+                case .reloaded: break
+                }
+            }
+            session = s
+        } catch {
+            openError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    func resolveConflict(keepMine: Bool) {
+        if keepMine { session?.keepEditorVersion() } else { session?.reloadFromDisk() }
+        conflictFileName = nil
     }
 
     // MARK: File operations
@@ -96,6 +138,7 @@ final class ProjectModel {
 
     func reload() {
         guard let ops = operations else { return }
+        session?.checkForExternalChange()
         do { tree = try ops.tree() } catch { tree = [] }
         if let sel = selection, !FileManager.default.fileExists(atPath: sel.path) { selection = nil }
     }

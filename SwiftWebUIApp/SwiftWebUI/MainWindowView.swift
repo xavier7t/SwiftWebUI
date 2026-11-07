@@ -17,22 +17,32 @@ struct MainWindowView: View {
     @SceneStorage("previewWidth") private var previewWidth: Double = 480
 
     var body: some View {
-        HStack(spacing: 0) {
-            if showSidebar {
-                SidebarView(model: model)
-                    .frame(width: sidebarWidth)
-                PaneDivider(width: $sidebarWidth, minWidth: PaneLayout.sidebarMin, maxWidth: 500, edge: .leading)
-            }
-            EditorPlaceholderView(fileName: model.selection?.lastPathComponent)
-                .frame(minWidth: PaneLayout.editorMin, maxWidth: .infinity)
-            if showPreview {
-                PaneDivider(width: $previewWidth, minWidth: PaneLayout.previewMin, maxWidth: 1200, edge: .trailing)
-                PreviewPlaceholderView()
-                    .frame(width: previewWidth)
+        GeometryReader { geo in
+            let editorMin = PaneLayout.editorMin
+            let sbMax = geo.size.width - editorMin - (showPreview ? PaneLayout.previewMin : 0)
+            let sb = showSidebar ? min(sidebarWidth, max(PaneLayout.sidebarMin, sbMax)) : 0
+            let pvMax = geo.size.width - editorMin - sb
+            let pv = showPreview ? min(previewWidth, max(PaneLayout.previewMin, pvMax)) : 0
+            HStack(spacing: 0) {
+                if showSidebar {
+                    SidebarView(model: model)
+                        .frame(width: sb)
+                        .clipped()
+                    PaneDivider(width: $sidebarWidth, minWidth: PaneLayout.sidebarMin, maxWidth: 500, edge: .leading)
+                }
+                EditorPane(model: model)
+                    .frame(minWidth: 0, maxWidth: .infinity)
+                    .clipped()
+                if showPreview {
+                    PaneDivider(width: $previewWidth, minWidth: PaneLayout.previewMin, maxWidth: 1200, edge: .trailing)
+                    PreviewPlaceholderView()
+                        .frame(width: pv)
+                        .clipped()
+                }
             }
         }
         .frame(
-            minWidth: (showSidebar ? PaneLayout.sidebarMin : 0) + PaneLayout.editorMin + (showPreview ? PaneLayout.previewMin : 0),
+            minWidth: (showSidebar ? PaneLayout.sidebarMin + 7 : 0) + PaneLayout.editorMin + (showPreview ? PaneLayout.previewMin + 7 : 0),
             minHeight: 400
         )
         .toolbar {
@@ -56,6 +66,17 @@ struct MainWindowView: View {
             }
         }
         .navigationTitle(model.project?.name ?? "SwiftWebUI")
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willResignActiveNotification)) { _ in model.saveCurrent() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in model.saveCurrent() }
+        .onDisappear { model.saveCurrent() }
+        .alert("File changed on disk", isPresented: Binding(
+            get: { model.conflictFileName != nil }, set: { if !$0 { model.conflictFileName = nil } })
+        ) {
+            Button("Keep My Changes") { model.resolveConflict(keepMine: true) }
+            Button("Reload from Disk", role: .destructive) { model.resolveConflict(keepMine: false) }
+        } message: {
+            Text("“\(model.conflictFileName ?? "")” was modified outside SwiftWebUI, and you have unsaved edits. Keep your version or reload the one on disk?")
+        }
     }
 }
 
@@ -91,11 +112,22 @@ private struct PaneDivider: View {
     }
 }
 
-struct EditorPlaceholderView: View {
-    var fileName: String?
+struct EditorPane: View {
+    var model: ProjectModel
     var body: some View {
-        PlaceholderPane(title: fileName ?? "Editor", subtitle: fileName == nil ? "Select a file in the sidebar" : "Code editor coming soon", systemImage: "chevron.left.forwardslash.chevron.right")
-            .background(Color(nsColor: .textBackgroundColor))
+        Group {
+            if let session = model.session {
+                CodeEditorView(session: session)
+                    .id(session.url)
+                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+                    .clipped()
+            } else if let error = model.openError {
+                PlaceholderPane(title: "Can’t open file", subtitle: error, systemImage: "exclamationmark.triangle")
+            } else {
+                PlaceholderPane(title: "Editor", subtitle: "Select a file in the sidebar", systemImage: "chevron.left.forwardslash.chevron.right")
+            }
+        }
+        .background(Color(nsColor: .textBackgroundColor))
     }
 }
 
