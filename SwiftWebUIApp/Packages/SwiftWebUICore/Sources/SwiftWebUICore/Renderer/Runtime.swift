@@ -7,21 +7,29 @@ public enum PageTemplate {
         "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: https: http:; font-src data:"
 
     /// A full page for `output`, working without any host: `@State` and buttons run from the inline script.
-    public static func document(_ output: RenderOutput, title: String = "SwiftWebUI") -> String {
-        page(title: title, rootHTML: output.html, boot: "swui.update(null, \(scriptSafe(output.statesJSON)));")
+    /// With `livePath`, the page also polls that same-origin URL (JSON `{version, html, states}`) and updates itself
+    /// in place when the version changes. Used when a browser views the preview from the local server.
+    public static func document(_ output: RenderOutput, title: String = "SwiftWebUI",
+                                livePath: String? = nil, liveVersion: Int = 0) -> String {
+        var boot = "swui.update(null, \(scriptSafe(output.statesJSON)));"
+        if let livePath {
+            boot += "\nswui.live(\(livePath.debugDescription), \(liveVersion));"
+        }
+        return page(title: title, rootHTML: output.html, boot: boot, connect: livePath != nil)
     }
 
     /// An empty page for a preview host to fill with `swui.update(html, states)`.
-    public static let shell: String = page(title: "Preview", rootHTML: "", boot: "")
+    public static let shell: String = page(title: "Preview", rootHTML: "", boot: "", connect: false)
 
-    private static func page(title: String, rootHTML: String, boot: String) -> String {
-        """
+    private static func page(title: String, rootHTML: String, boot: String, connect: Bool) -> String {
+        let csp = connect ? contentSecurityPolicy + "; connect-src 'self'" : contentSecurityPolicy
+        return """
         <!doctype html>
         <html lang="en">
         <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <meta http-equiv="Content-Security-Policy" content="\(contentSecurityPolicy)">
+        <meta http-equiv="Content-Security-Policy" content="\(csp)">
         <title>\(HTMLElement.escapeText(title))</title>
         <style>
         \(css)
@@ -129,6 +137,15 @@ public enum PageTemplate {
             morph(root, doc.body);
           }
           refresh();
+        },
+        // Polls `path` and applies new renders from the local preview server.
+        live: function (path, version) {
+          var v = version;
+          setInterval(function () {
+            fetch(path + '?since=' + v, { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
+              if (d.version !== v) { v = d.version; swui.update(d.html, d.states); }
+            }).catch(function () {});
+          }, 300);
         },
         state: function () { return JSON.parse(JSON.stringify(S)); }
       };

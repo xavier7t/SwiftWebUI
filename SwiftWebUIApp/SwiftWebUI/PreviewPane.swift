@@ -15,6 +15,14 @@ struct PreviewPane: View {
 
     var body: some View {
         let preview = model.preview
+        VStack(spacing: 0) {
+            URLBar(url: preview.serverURL)
+            Divider()
+            page(preview)
+        }
+    }
+
+    @ViewBuilder private func page(_ preview: PreviewModel) -> some View {
         ZStack(alignment: .top) {
             PreviewWebView(host: preview.host)
             if !preview.hasRender {
@@ -39,6 +47,45 @@ struct PreviewPane: View {
             }
         }
         .animation(.easeInOut(duration: 0.15), value: preview.isShowingStaleRender)
+    }
+}
+
+/// Shows the address the preview is served at, with buttons to copy it or open it in the default browser.
+struct URLBar: View {
+    let url: URL?
+    @State private var copied = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "globe").foregroundStyle(.secondary).font(.caption)
+            Text(url?.absoluteString ?? "Starting preview server…")
+                .font(.callout.monospaced())
+                .foregroundStyle(url == nil ? .secondary : .primary)
+                .lineLimit(1).truncationMode(.middle)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button {
+                guard let url else { return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                copied = true
+                Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
+            } label: {
+                Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
+                    .labelStyle(.iconOnly)
+            }
+            .help("Copy the URL")
+            Button {
+                if let url { NSWorkspace.shared.open(url) }
+            } label: {
+                Label("Open in Browser", systemImage: "arrow.up.forward.app").labelStyle(.iconOnly)
+            }
+            .help("Open in your default browser")
+        }
+        .buttonStyle(.borderless)
+        .disabled(url == nil)
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 }
 

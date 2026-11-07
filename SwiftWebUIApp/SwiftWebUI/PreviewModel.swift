@@ -12,13 +12,23 @@ final class PreviewModel {
     private(set) var isShowingStaleRender = false
     /// `true` once anything has been shown in the page.
     private(set) var hasRender = false
+    /// Address of the local preview server, for opening the page in a browser.
+    private(set) var serverURL: URL?
 
     @ObservationIgnored let host = PreviewWebHost()
+    @ObservationIgnored private let server = PreviewServer()
     /// How long to wait for further keystrokes before parsing.
     @ObservationIgnored var debounce: Duration = .milliseconds(30)
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var hasGoodRender = false
+
+    init() {
+        server.onReady = { [weak self] port in
+            Task { @MainActor in self?.serverURL = URL(string: "http://localhost:\(port)/") }
+        }
+        server.start()
+    }
 
     struct Computed: Sendable {
         let diagnostics: [Diagnostic]
@@ -62,6 +72,7 @@ final class PreviewModel {
         diagnostics = result.diagnostics
         if let output = result.output, !result.hasErrors || !hasGoodRender {
             host.show(output)
+            server.update(output)
             hasRender = true
             if !result.hasErrors { hasGoodRender = true }
         }
@@ -76,6 +87,7 @@ final class PreviewModel {
         hasRender = false
         hasGoodRender = false
         host.clear()
+        server.update(RenderOutput.empty)
     }
 }
 

@@ -16,6 +16,15 @@ public struct RenderOutput: Sendable, Equatable {
     public let statesJSON: String
     /// Problems found while rendering, such as an unknown color. These are warnings: the page is still rendered.
     public let diagnostics: [Diagnostic]
+
+    public init(html: String, statesJSON: String, diagnostics: [Diagnostic]) {
+        self.html = html
+        self.statesJSON = statesJSON
+        self.diagnostics = diagnostics
+    }
+
+    /// A page with nothing in it.
+    public static let empty = RenderOutput(html: "", statesJSON: "{}", diagnostics: [])
 }
 
 public enum HTMLRenderer {
