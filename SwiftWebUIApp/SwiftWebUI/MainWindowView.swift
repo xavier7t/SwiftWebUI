@@ -10,7 +10,11 @@ private enum PaneLayout {
 }
 
 struct MainWindowView: View {
+    /// The project this window shows; nil only in previews.
+    var root: URL?
     @State private var model = ProjectModel()
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
     @SceneStorage("showSidebar") private var showSidebar = true
     @SceneStorage("showPreview") private var showPreview = true
     @SceneStorage("sidebarWidth") private var sidebarWidth: Double = PaneLayout.sidebarIdeal
@@ -66,9 +70,29 @@ struct MainWindowView: View {
             }
         }
         .navigationTitle(model.project?.name ?? "SwiftWebUI")
+        .onAppear {
+            AppState.shared.projectWindowAppeared()
+            guard let root, model.project == nil else { return }
+            if AppState.shared.ensureAccess(to: root) {
+                model.open(root)
+            }
+            if model.project == nil {
+                // Restored window whose project can't be reached any more.
+                AppState.shared.errorMessage = "“\(root.lastPathComponent)” can’t be opened. Choose it again from the welcome window."
+                dismissWindow()
+                openWindow(id: "welcome")
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willResignActiveNotification)) { _ in model.saveCurrent() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in model.saveCurrent() }
-        .onDisappear { model.saveCurrent() }
+        .onDisappear {
+            model.saveCurrent()
+            AppState.shared.projectWindowDisappeared()
+            // Closing the last project window brings the welcome window back.
+            if AppState.shared.openProjectWindows == 0, !AppState.shared.isTerminating {
+                openWindow(id: "welcome")
+            }
+        }
         .alert("File changed on disk", isPresented: Binding(
             get: { model.conflictFileName != nil }, set: { if !$0 { model.conflictFileName = nil } })
         ) {
