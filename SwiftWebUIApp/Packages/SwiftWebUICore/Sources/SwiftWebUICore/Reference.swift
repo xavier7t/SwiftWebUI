@@ -11,9 +11,17 @@ public struct ReferenceEntry: Equatable, Sendable, Identifiable {
 }
 
 public enum Reference {
+    private static func title(for category: ViewSpec.Category) -> String {
+        switch category {
+        case .layout: "Layout views"
+        case .content: "Content views"
+        case .gradient: "Gradients"
+        }
+    }
+
     public static var entries: [ReferenceEntry] {
         let views = Registry.views.map {
-            ReferenceEntry(section: $0.category == .layout ? "Layout views" : "Content views", name: $0.name,
+            ReferenceEntry(section: Self.title(for: $0.category), name: $0.name,
                            summary: $0.summary, example: $0.example, arguments: $0.arguments)
         }
         let modifiers = Registry.modifiers.map {

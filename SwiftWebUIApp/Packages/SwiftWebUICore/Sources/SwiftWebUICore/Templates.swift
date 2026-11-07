@@ -47,6 +47,7 @@ public struct ProjectTemplate: Hashable, Sendable, Identifiable {
                 VStack(spacing: 8) {
                     Text("Build your site")
                         .font(.largeTitle)
+                        .foregroundStyle(LinearGradient(colors: [.blue, .purple], startPoint: .leading, endPoint: .trailing))
                     Text("A landing page written in SwiftUI style.")
                         .font(.title3)
                         .foregroundColor(.gray)

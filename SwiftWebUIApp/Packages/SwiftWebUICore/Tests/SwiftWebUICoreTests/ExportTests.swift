@@ -156,3 +156,37 @@ private final class ExportedPage: NSObject, WKNavigationDelegate, WKScriptMessag
         #expect(HTMLRenderer.render(parse("(.diagonal)").tree!).diagnostics.count == 1)
     }
 }
+
+@MainActor @Suite(.serialized) struct GradientBrowserTests {
+    @Test func browserAcceptsEveryGradient() async throws {
+        let dir = temp(); defer { try? FileManager.default.removeItem(at: dir) }
+        let project = try Project.create(name: "P", in: dir)
+        try """
+        struct ContentView: View {
+            var body: some View {
+                VStack {
+                    LinearGradient(colors: [.red, .blue], startPoint: .top, endPoint: .center).frame(width: 100, height: 100)
+                    LinearGradient(colors: [.red, .blue], startPoint: .topLeading, endPoint: .bottomTrailing).frame(width: 100, height: 100)
+                    RadialGradient(colors: [.red, .blue], center: .center, startRadius: 0, endRadius: 50).frame(width: 100, height: 100)
+                    AngularGradient(colors: [.red, .blue, .red], center: .center).frame(width: 100, height: 100)
+                    EllipticalGradient(colors: [.red, .blue]).frame(width: 100, height: 100)
+                    MeshGradient(width: 2, height: 2, points: [[0, 0], [1, 0], [0, 1], [1, 1]], colors: [.red, .blue, .green, .yellow]).frame(width: 100, height: 100)
+                    Text("Hi").foregroundStyle(LinearGradient(colors: [.pink, .orange], startPoint: .leading, endPoint: .trailing))
+                }
+            }
+        }
+        """.write(to: project.sourcesURL.appendingPathComponent("ContentView.swift"), atomically: true, encoding: .utf8)
+        let out = dir.appendingPathComponent("site")
+        let report = try SiteExporter.export(project: project, to: out)
+        #expect(report.warnings.isEmpty, "\(report.warnings)")
+        let page = ExportedPage()
+        await page.load(out)
+        let images = await page.eval("return [...document.querySelectorAll('.gradient')].map(e => getComputedStyle(e).backgroundImage)") as? [String]
+        #expect(images?.count == 6)
+        let expected = ["linear-gradient", "linear-gradient", "radial-gradient", "conic-gradient", "radial-gradient", "radial-gradient"]
+        for (got, want) in zip(images ?? [], expected) { #expect(got.hasPrefix(want), "\(got)") }
+        let text = await page.eval("return getComputedStyle(document.querySelector('.text')).backgroundImage") as? String
+        #expect(text?.hasPrefix("linear-gradient") == true, "\(String(describing: text))")
+        #expect(page.errors.isEmpty)
+    }
+}

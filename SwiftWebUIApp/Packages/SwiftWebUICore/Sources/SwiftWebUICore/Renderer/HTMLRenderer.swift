@@ -106,7 +106,9 @@ final class HTMLBuilder {
         case "Image": base = image(node)
         case "Button": base = button(node)
         case "Link": base = link(node)
-        default: base = HTMLElement(class: "unknown")
+        default:
+            if Gradients.kinds.contains(node.kind) { base = gradientView(node) }
+            else { base = HTMLElement(class: "unknown") }
         }
         return [applyModifiers(base, node.modifiers)]
     }
@@ -255,6 +257,19 @@ final class HTMLBuilder {
         if vertical { content.set("min-height", "100%") }
         content.children = children(node.children, axis: .column).nodes
         el.children = [.element(content)]
+        return el
+    }
+
+    /// A gradient used as a view fills the space it is given.
+    private func gradientView(_ node: ViewNode) -> HTMLElement {
+        var el = HTMLElement(class: "gradient")
+        el.expandsH = true
+        el.expandsV = true
+        switch Gradients.build(kind: node.kind, args: node.arguments) {
+        case .css(let css): el.set("background-image", css)
+        case .invalid(let message, let hint): warn(message, hint, node.location)
+        case .notGradient: break
+        }
         return el
     }
 
@@ -466,13 +481,31 @@ final class HTMLBuilder {
             if let design = font.design { layer.el.set("font-family", design) }
         case "foregroundColor", "foregroundStyle":
             guard let value = m.arguments.first?.value else { return }
+            switch Gradients.css(value) {
+            case .css(let css):
+                if layer.el.has("color") || layer.hasBackground { layer = wrap(layer) }
+                layer.el.set("background-image", css)
+                layer.el.set("-webkit-background-clip", "text")
+                layer.el.set("background-clip", "text")
+                layer.el.set("color", "transparent")
+                return
+            case .invalid(let message, let hint): return warn(message, hint, m.location)
+            case .notGradient: break
+            }
             guard let color = Palette.color(value) else { return badColor(value, m) }
             if !layer.el.has("color") { layer.el.set("color", color) }
         case "background":
             guard let value = m.arguments.first(where: { $0.label == nil })?.value else { return }
-            guard let color = Palette.color(value) else { return badColor(value, m) }
+            var fill: (property: String, value: String)
+            switch Gradients.css(value) {
+            case .css(let css): fill = ("background-image", css)
+            case .invalid(let message, let hint): return warn(message, hint, m.location)
+            case .notGradient:
+                guard let color = Palette.color(value) else { return badColor(value, m) }
+                fill = ("background-color", color)
+            }
             if layer.hasBackground || layer.hasClip { layer = wrap(layer) }
-            layer.el.set("background-color", color)
+            layer.el.set(fill.property, fill.value)
             layer.hasBackground = true
         case "cornerRadius":
             guard case .number(let r)? = m.arguments.first?.value else {

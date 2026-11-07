@@ -806,8 +806,12 @@ private final class Builder {
         if let ref = call.calledExpression.as(DeclReferenceExprSyntax.self), ref.baseName.text == "Color" {
             return arguments().map { .member(base: "Color", name: "init", arguments: $0) }
         }
+        if let ref = call.calledExpression.as(DeclReferenceExprSyntax.self),
+           Gradients.kinds.contains(ref.baseName.text) || Gradients.helperTypes.contains(ref.baseName.text) {
+            return arguments().map { .member(base: ref.baseName.text, name: "init", arguments: $0) }
+        }
         unsupported(call, "“\(snippet(call))” isn’t supported here.",
-                    "Use a literal value, or a color such as .blue, Color.blue or Color(red: 0.1, green: 0.2, blue: 0.3).")
+                    "Use a literal value, a color such as .blue or Color(red: 0.1, green: 0.2, blue: 0.3), or a gradient such as LinearGradient(colors: [.red, .blue], startPoint: .top, endPoint: .bottom).")
         return nil
     }
 }
