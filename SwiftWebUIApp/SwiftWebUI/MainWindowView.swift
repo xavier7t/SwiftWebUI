@@ -10,6 +10,7 @@ private enum PaneLayout {
 }
 
 struct MainWindowView: View {
+    @State private var model = ProjectModel()
     @SceneStorage("showSidebar") private var showSidebar = true
     @SceneStorage("showPreview") private var showPreview = true
     @SceneStorage("sidebarWidth") private var sidebarWidth: Double = PaneLayout.sidebarIdeal
@@ -18,11 +19,11 @@ struct MainWindowView: View {
     var body: some View {
         HStack(spacing: 0) {
             if showSidebar {
-                SidebarPlaceholderView()
+                SidebarView(model: model)
                     .frame(width: sidebarWidth)
                 PaneDivider(width: $sidebarWidth, minWidth: PaneLayout.sidebarMin, maxWidth: 500, edge: .leading)
             }
-            EditorPlaceholderView()
+            EditorPlaceholderView(fileName: model.selection?.lastPathComponent)
                 .frame(minWidth: PaneLayout.editorMin, maxWidth: .infinity)
             if showPreview {
                 PaneDivider(width: $previewWidth, minWidth: PaneLayout.previewMin, maxWidth: 1200, edge: .trailing)
@@ -54,7 +55,7 @@ struct MainWindowView: View {
                 .keyboardShortcut("0", modifiers: [.command, .option])
             }
         }
-        .navigationTitle("SwiftWebUI")
+        .navigationTitle(model.project?.name ?? "SwiftWebUI")
     }
 }
 
@@ -90,16 +91,10 @@ private struct PaneDivider: View {
     }
 }
 
-struct SidebarPlaceholderView: View {
-    var body: some View {
-        PlaceholderPane(title: "Sidebar", subtitle: "Project files will appear here", systemImage: "folder")
-            .background(.regularMaterial)
-    }
-}
-
 struct EditorPlaceholderView: View {
+    var fileName: String?
     var body: some View {
-        PlaceholderPane(title: "Editor", subtitle: "Code editor coming soon", systemImage: "chevron.left.forwardslash.chevron.right")
+        PlaceholderPane(title: fileName ?? "Editor", subtitle: fileName == nil ? "Select a file in the sidebar" : "Code editor coming soon", systemImage: "chevron.left.forwardslash.chevron.right")
             .background(Color(nsColor: .textBackgroundColor))
     }
 }
