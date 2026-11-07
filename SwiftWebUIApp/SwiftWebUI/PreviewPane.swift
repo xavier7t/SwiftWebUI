@@ -2,6 +2,16 @@ import SwiftUI
 import WebKit
 import SwiftWebUICore
 
+/// The width the preview page is laid out at.
+enum PreviewWidth: String, CaseIterable, Identifiable {
+    case mobile, tablet, desktop
+    var id: String { rawValue }
+    /// `nil` fills the pane.
+    var points: CGFloat? { switch self { case .mobile: 390; case .tablet: 768; case .desktop: nil } }
+    var label: String { switch self { case .mobile: "Mobile"; case .tablet: "Tablet"; case .desktop: "Desktop" } }
+    var symbol: String { switch self { case .mobile: "iphone"; case .tablet: "ipad"; case .desktop: "desktopcomputer" } }
+}
+
 struct PreviewWebView: NSViewRepresentable {
     let host: PreviewWebHost
 
@@ -12,13 +22,34 @@ struct PreviewWebView: NSViewRepresentable {
 /// The right-hand pane: the live page, with a banner while it shows an older render because the code has errors.
 struct PreviewPane: View {
     var model: ProjectModel
+    @SceneStorage("previewWidthMode") private var widthMode = PreviewWidth.desktop.rawValue
 
     var body: some View {
         let preview = model.preview
+        let mode = PreviewWidth(rawValue: widthMode) ?? .desktop
         VStack(spacing: 0) {
             URLBar(url: preview.serverURL)
+            HStack {
+                Picker("Width", selection: $widthMode) {
+                    ForEach(PreviewWidth.allCases) { w in
+                        Label(w.label, systemImage: w.symbol).tag(w.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented).labelsHidden()
+                .labelStyle(.iconOnly)
+                .fixedSize()
+                .help("Preview width: mobile, tablet or desktop")
+                .accessibilityIdentifier("previewWidthPicker")
+                if let w = mode.points { Text("\(Int(w)) pt").font(.caption).foregroundStyle(.secondary) }
+                Spacer()
+            }
+            .padding(.horizontal, 10).padding(.bottom, 6)
+            .background(Color(nsColor: .windowBackgroundColor))
             Divider()
             page(preview)
+                .frame(maxWidth: mode.points ?? .infinity)
+                .frame(maxWidth: .infinity)
+                .background(Color(nsColor: .underPageBackgroundColor))
         }
     }
 
@@ -30,6 +61,7 @@ struct PreviewPane: View {
                     Image(systemName: "safari").font(.system(size: 32)).foregroundStyle(.secondary)
                     Text("Preview").font(.headline)
                     Text(model.project == nil ? "Open a project to see it here"
+                         : model.isEmptyProject ? "Add a Swift file to see a preview"
                          : preview.diagnostics.contains { $0.severity == .error } ? "Fix the errors to see a preview"
                          : "Nothing to show yet")
                         .font(.subheadline).foregroundStyle(.secondary)

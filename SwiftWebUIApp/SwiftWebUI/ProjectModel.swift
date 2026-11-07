@@ -71,6 +71,42 @@ final class ProjectModel {
         project = nil; tree = []; selection = nil; session = nil
     }
 
+    // MARK: Export
+
+    /// The outcome of the last export, shown in an alert.
+    enum ExportOutcome: Identifiable {
+        case done(ExportReport)
+        case failed(String)
+        var id: String {
+            switch self { case .done(let r): "done-\(r.destination.path)"; case .failed(let m): "failed-\(m)" }
+        }
+    }
+    var exportOutcome: ExportOutcome?
+
+    /// Asks for a folder and writes the project there as a static site.
+    func exportSite() {
+        guard let project else { return }
+        saveCurrent()
+        let panel = NSOpenPanel()
+        panel.message = "Choose a folder for the exported site"
+        panel.prompt = "Export"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        let scoped = folder.startAccessingSecurityScopedResource()
+        defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
+        do {
+            exportOutcome = .done(try SiteExporter.export(project: project, to: folder))
+        } catch {
+            exportOutcome = .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+        }
+    }
+
+    /// `true` when the project has no source files at all.
+    var isEmptyProject: Bool { project != nil && !tree.flatMap(Self.flatten).contains { !$0.isDirectory } }
+
     // MARK: Editor session
 
     /// Saves any pending edits in the open file.

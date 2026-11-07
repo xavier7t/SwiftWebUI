@@ -44,7 +44,8 @@ public struct Project: Equatable, Sendable {
 
     /// Creates `<location>/<name>` with a manifest, a sources folder and an entry view file.
     @discardableResult
-    public static func create(name: String, in location: URL, fileManager: FileManager = .default) throws -> Project {
+    public static func create(name: String, in location: URL, template: ProjectTemplate = .blank,
+                              fileManager: FileManager = .default) throws -> Project {
         try FileNameValidator.validate(name)
         let root = location.appendingPathComponent(name, isDirectory: true).standardizedFileURL
         if fileManager.fileExists(atPath: root.appendingPathComponent(ProjectManifest.fileName).path) {
@@ -60,9 +61,11 @@ public struct Project: Equatable, Sendable {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try encoder.encode(manifest).write(to: root.appendingPathComponent(ProjectManifest.fileName))
-            try Self.defaultEntrySource.write(
-                to: project.sourcesURL.appendingPathComponent("\(manifest.entryView).swift"),
-                atomically: true, encoding: .utf8)
+            for (path, text) in template.files {
+                let url = project.sourcesURL.appendingPathComponent(path)
+                try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try text.write(to: url, atomically: true, encoding: .utf8)
+            }
         } catch {
             throw ProjectError.operationFailed("Could not create the project: \(error.localizedDescription)")
         }

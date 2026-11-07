@@ -124,6 +124,7 @@ private struct NewProjectSheet: View {
     @State private var name = "MySite"
     @State private var location: URL?
     @State private var error: String?
+    @State private var template = ProjectTemplate.landing
 
     private var nameError: String? {
         do { try FileNameValidator.validate(name); return nil }
@@ -136,6 +137,11 @@ private struct NewProjectSheet: View {
             TextField("Name", text: $name)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityIdentifier("projectNameField")
+            Picker("Template", selection: $template) {
+                ForEach(ProjectTemplate.all) { t in Text(t.name).tag(t) }
+            }
+            .accessibilityIdentifier("templatePicker")
+            Text(template.summary).font(.caption).foregroundStyle(.secondary)
             HStack {
                 Text(location.map { ($0.path as NSString).abbreviatingWithTildeInPath } ?? "No location chosen")
                     .foregroundStyle(location == nil ? .secondary : .primary)
@@ -162,7 +168,7 @@ private struct NewProjectSheet: View {
 
     private func create() {
         guard let location else { return }
-        if let url = AppState.shared.createProject(name: name, in: location) {
+        if let url = AppState.shared.createProject(name: name, in: location, template: template) {
             dismiss()
             onCreated(url)
         } else {

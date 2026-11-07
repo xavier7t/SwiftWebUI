@@ -15,6 +15,7 @@ struct MainWindowView: View {
     @State private var model = ProjectModel()
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
+    @State private var showReference = false
     @SceneStorage("showSidebar") private var showSidebar = true
     @SceneStorage("showPreview") private var showPreview = true
     @SceneStorage("sidebarWidth") private var sidebarWidth: Double = PaneLayout.sidebarIdeal
@@ -60,6 +61,15 @@ struct MainWindowView: View {
                 .keyboardShortcut("0", modifiers: [.command])
             }
             ToolbarItemGroup(placement: .primaryAction) {
+                Button { showReference = true } label: {
+                    Label("Reference", systemImage: "book")
+                }
+                .help("Supported views and modifiers")
+                Button { model.exportSite() } label: {
+                    Label("Export", systemImage: "square.and.arrow.up")
+                }
+                .help("Export as a static website")
+                .disabled(model.project == nil)
                 Button {
                     withAnimation(.easeInOut(duration: 0.15)) { showPreview.toggle() }
                 } label: {
@@ -93,6 +103,16 @@ struct MainWindowView: View {
                 openWindow(id: "welcome")
             }
         }
+        .focusedSceneValue(\.exportAction, model.project == nil ? nil : { model.exportSite() })
+        .sheet(isPresented: $showReference) { ReferenceView() }
+        .alert(exportTitle, isPresented: Binding(
+            get: { model.exportOutcome != nil }, set: { if !$0 { model.exportOutcome = nil } })
+        ) {
+            if case .done(let report)? = model.exportOutcome {
+                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([report.destination]) }
+            }
+            Button("OK", role: .cancel) {}
+        } message: { Text(exportMessage) }
         .alert("File changed on disk", isPresented: Binding(
             get: { model.conflictFileName != nil }, set: { if !$0 { model.conflictFileName = nil } })
         ) {
@@ -101,6 +121,34 @@ struct MainWindowView: View {
         } message: {
             Text("“\(model.conflictFileName ?? "")” was modified outside SwiftWebUI, and you have unsaved edits. Keep your version or reload the one on disk?")
         }
+    }
+}
+
+extension MainWindowView {
+    fileprivate var exportTitle: String {
+        if case .failed? = model.exportOutcome { return "Export failed" }
+        return "Export complete"
+    }
+
+    fileprivate var exportMessage: String {
+        switch model.exportOutcome {
+        case .done(let r):
+            var text = "Wrote \(r.files.count) files to “\(r.destination.lastPathComponent)”."
+            if !r.missingImages.isEmpty {
+                text += "\n\nImages not found: \(r.missingImages.joined(separator: ", ")). Add them to the project’s Assets folder."
+            }
+            return text
+        case .failed(let m): return m
+        case nil: return ""
+        }
+    }
+}
+
+struct ExportActionKey: FocusedValueKey { typealias Value = () -> Void }
+extension FocusedValues {
+    var exportAction: (() -> Void)? {
+        get { self[ExportActionKey.self] }
+        set { self[ExportActionKey.self] = newValue }
     }
 }
 

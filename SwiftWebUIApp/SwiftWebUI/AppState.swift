@@ -109,11 +109,11 @@ final class AppState {
     }
 
     /// Creates a project in `location` and prepares it to open.
-    func createProject(name: String, in location: URL) -> URL? {
+    func createProject(name: String, in location: URL, template: ProjectTemplate = .blank) -> URL? {
         let scoped = location.startAccessingSecurityScopedResource()
         defer { if scoped { location.stopAccessingSecurityScopedResource() } }
         do {
-            let project = try Project.create(name: name, in: location)
+            let project = try Project.create(name: name, in: location, template: template)
             // The new folder is inside `location`, whose access ends here, so keep it open through its own scope.
             if scoped { held[project.root.path] = location; _ = location.startAccessingSecurityScopedResource() }
             try? recentsStore.add(project)

@@ -101,6 +101,7 @@ final class HTMLBuilder {
         case "ZStack": base = zstack(node)
         case "Spacer": base = spacer(node)
         case "List": base = list(node)
+        case "ScrollView": base = scrollView(node)
         case "Text": base = text(node)
         case "Image": base = image(node)
         case "Button": base = button(node)
@@ -216,6 +217,44 @@ final class HTMLBuilder {
         el.children = r.nodes
         el.expandsH = r.h
         el.expandsV = r.v
+        return el
+    }
+
+    private func scrollView(_ node: ViewNode) -> HTMLElement {
+        var horizontal = false, vertical = false
+        let axisArg = node.arguments.first { $0.label == nil }?.value
+        func axis(_ value: Value) {
+            if case .member(_, let name, _) = value, name == "horizontal" { horizontal = true }
+            else if case .member(_, let name, _) = value, name == "vertical" { vertical = true }
+            else { warn("“\(value)” isn’t a valid scroll axis.", "Use .vertical, .horizontal or [.horizontal, .vertical].", node.location) }
+        }
+        switch axisArg {
+        case .array(let items)?: items.forEach(axis)
+        case let value?: axis(value)
+        case nil: vertical = true
+        }
+        if !horizontal && !vertical { vertical = true }
+
+        var el = HTMLElement(class: "scroll")
+        el.set("overflow-x", horizontal ? "auto" : "hidden")
+        el.set("overflow-y", vertical ? "auto" : "hidden")
+        el.set("min-width", "0")
+        el.set("min-height", "0")
+        el.expandsH = horizontal
+        el.expandsV = vertical
+        // Content larger than the scroll view must not make the parents grow with it.
+        if horizontal { el.set("contain", "inline-size") }
+
+        // The content is laid out at its natural size, so it can be larger than the scroll view.
+        var content = HTMLElement(class: "scroll-content")
+        content.set("display", "flex")
+        content.set("flex-direction", "column")
+        content.set("align-items", "center")
+        content.set("justify-content", "center")
+        if horizontal { content.set("width", "max-content"); content.set("min-width", "100%") }
+        if vertical { content.set("min-height", "100%") }
+        content.children = children(node.children, axis: .column).nodes
+        el.children = [.element(content)]
         return el
     }
 

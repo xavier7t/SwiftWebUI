@@ -24,6 +24,7 @@ struct SwiftWebUIApp: App {
 private struct ProjectCommands: Commands {
     var app: AppState
     @Environment(\.openWindow) private var openWindow
+    @FocusedValue(\.exportAction) private var exportAction
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -49,6 +50,10 @@ private struct ProjectCommands: Commands {
                 Divider()
                 Button("Clear Menu") { app.clearRecents() }.disabled(app.recents.isEmpty)
             }
+            Divider()
+            Button("Export Site…") { exportAction?() }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .disabled(exportAction == nil)
             Divider()
             Button("Welcome Window") { openWindow(id: "welcome") }
         }

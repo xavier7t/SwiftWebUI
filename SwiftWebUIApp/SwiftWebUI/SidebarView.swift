@@ -33,6 +33,17 @@ struct SidebarView: View {
                     guard let s = model.selection, model.renaming == nil else { return .ignored }
                     beginRename(s); return .handled
                 }
+                .overlay {
+                    if model.isEmptyProject {
+                        VStack(spacing: 8) {
+                            Text("No Files").font(.headline)
+                            Text("This project is empty. Add a Swift file to start.")
+                                .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                            Button("New File…") { promptText = ""; prompt = NamePrompt(kind: .file, folder: nil) }
+                        }
+                        .padding()
+                    }
+                }
                 .safeAreaInset(edge: .bottom) { footer }
             }
         }

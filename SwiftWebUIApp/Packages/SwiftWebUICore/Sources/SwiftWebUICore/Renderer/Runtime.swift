@@ -47,7 +47,7 @@ public enum PageTemplate {
     }
 
     /// JSON placed inside a `<script>` must not be able to close it.
-    private static func scriptSafe(_ json: String) -> String {
+    static func scriptSafe(_ json: String) -> String {
         json.replacingOccurrences(of: "</", with: "<\\/").replacingOccurrences(of: "<!--", with: "<\\!--")
     }
 
