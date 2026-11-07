@@ -120,3 +120,26 @@ private func css(_ gradient: String, as usage: String = "Text(\"x\").background(
         #expect(names == ["LinearGradient", "RadialGradient", "AngularGradient", "EllipticalGradient", "MeshGradient"])
     }
 }
+
+@Suite struct ReferenceSnippetTests {
+    @Test func everySnippetParsesAndRendersCleanly() {
+        for entry in Reference.entries {
+            #expect(!entry.snippet.contains("…"), "\(entry.name)")
+            let body = entry.name.hasPrefix(".")
+                ? "Text(\"Hello\")\n\(entry.snippet)"
+                : entry.snippet
+            let r = ViewTreeBuilder.build(source: "struct ContentView: View {\n var body: some View {\n\(body)\n }\n}", entryView: "ContentView")
+            #expect(!r.hasErrors, "\(entry.name): \(r.diagnostics)")
+            if let tree = r.tree {
+                let out = HTMLRenderer.render(tree)
+                #expect(out.diagnostics.isEmpty, "\(entry.name): \(out.diagnostics)")
+                #expect(!out.html.contains("class=\"unknown\""), "\(entry.name)")
+            }
+        }
+    }
+
+    @Test func viewSnippetsStartWithTheirName() {
+        for e in Reference.entries where !e.name.hasPrefix(".") { #expect(e.snippet.hasPrefix(e.name), "\(e.name)") }
+        for e in Reference.entries where e.name.hasPrefix(".") { #expect(e.snippet.hasPrefix(e.name), "\(e.name)") }
+    }
+}

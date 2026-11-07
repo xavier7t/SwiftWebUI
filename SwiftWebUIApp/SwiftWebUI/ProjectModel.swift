@@ -21,6 +21,21 @@ final class ProjectModel {
     /// Asks the editor to move the caret to a position in the open file.
     private(set) var revealRequest: RevealRequest?
 
+    /// Asks the editor to insert code at the caret.
+    private(set) var insertRequest: InsertRequest?
+
+    struct InsertRequest: Equatable {
+        let id = UUID()
+        let text: String
+    }
+
+    var canInsert: Bool { session != nil }
+
+    func insert(_ snippet: String) {
+        guard session != nil else { return }
+        insertRequest = InsertRequest(text: snippet)
+    }
+
     struct RevealRequest: Equatable {
         let id = UUID()
         let line: Int

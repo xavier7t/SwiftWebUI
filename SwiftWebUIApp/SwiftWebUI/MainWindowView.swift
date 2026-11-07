@@ -104,7 +104,7 @@ struct MainWindowView: View {
             }
         }
         .focusedSceneValue(\.exportAction, model.project == nil ? nil : { model.exportSite() })
-        .sheet(isPresented: $showReference) { ReferenceView() }
+        .sheet(isPresented: $showReference) { ReferenceView(canInsert: model.canInsert, fileName: model.session?.url.lastPathComponent) { model.insert($0.snippet) } }
         .alert(exportTitle, isPresented: Binding(
             get: { model.exportOutcome != nil }, set: { if !$0 { model.exportOutcome = nil } })
         ) {
@@ -196,7 +196,8 @@ struct EditorPane: View {
     @ViewBuilder private var editor: some View {
         Group {
             if let session = model.session {
-                CodeEditorView(session: session, diagnostics: model.openFileDiagnostics, reveal: model.revealRequest)
+                CodeEditorView(session: session, diagnostics: model.openFileDiagnostics, reveal: model.revealRequest,
+                               insert: model.insertRequest)
                     .id(session.url)
                     .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
                     .clipped()

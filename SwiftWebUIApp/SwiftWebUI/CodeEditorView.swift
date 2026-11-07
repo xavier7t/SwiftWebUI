@@ -9,6 +9,8 @@ struct CodeEditorView: NSViewRepresentable {
     var diagnostics: [Diagnostic] = []
     /// A request to move the caret, e.g. from the problems list.
     var reveal: ProjectModel.RevealRequest?
+    /// A request to insert code at the caret, e.g. from the reference.
+    var insert: ProjectModel.InsertRequest?
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -65,6 +67,7 @@ struct CodeEditorView: NSViewRepresentable {
         context.coordinator.attach(textView: textView, session: session)
         context.coordinator.show(diagnostics)
         context.coordinator.reveal(reveal)
+        context.coordinator.insert(insert)
     }
 
     // MARK: Coordinator
@@ -157,6 +160,36 @@ struct CodeEditorView: NSViewRepresentable {
             tv.setSelectedRange(NSRange(location: offset, length: 0))
             tv.scrollRangeToVisible(NSRange(location: offset, length: 0))
             tv.showFindIndicator(for: NSRange(location: offset, length: min(1, ns.length - offset)))
+        }
+
+        private static var handledInsert: UUID?
+
+        /// Inserts code at the caret, on its own line and indented to match, with the rest of the line moved below it, through the text view so undo works.
+        func insert(_ request: ProjectModel.InsertRequest?) {
+            guard let request, request.id != Self.handledInsert, let tv = textView else { return }
+            Self.handledInsert = request.id
+            let ns = tv.string as NSString
+            let selection = tv.selectedRange()
+            let lineStart = ns.lineRange(for: NSRange(location: selection.location, length: 0)).location
+            let before = ns.substring(with: NSRange(location: lineStart, length: selection.location - lineStart))
+            let indent = String(before.prefix { $0 == " " || $0 == "\t" })
+            let startsOnNewLine = before.allSatisfy { $0 == " " || $0 == "\t" }
+            let lines = request.text.components(separatedBy: "\n")
+            var text = lines.enumerated().map { $0.offset == 0 && startsOnNewLine ? $0.element : indent + $0.element }
+                .joined(separator: "\n")
+            if !startsOnNewLine { text = "\n" + text }
+            // Whatever followed the caret moves to its own line below the example.
+            let after = selection.location + selection.length
+            let atLineEnd = after >= ns.length || ns.character(at: after) == 10
+            if !atLineEnd { text += "\n" + indent }
+            guard tv.shouldChangeText(in: selection, replacementString: text) else { return }
+            tv.textStorage?.replaceCharacters(in: selection, with: text)
+            tv.didChangeText()
+            var end = selection.location + (text as NSString).length
+            // At the end of a line, the caret goes to the start of the next one instead of adding a blank line.
+            if atLineEnd, end < (tv.string as NSString).length { end += 1 }
+            tv.setSelectedRange(NSRange(location: end, length: 0))
+            tv.scrollRangeToVisible(NSRange(location: end, length: 0))
         }
 
         /// UTF-16 offset of a 1-based line and character column, clamped to the line.
