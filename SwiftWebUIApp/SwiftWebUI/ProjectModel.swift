@@ -16,9 +16,20 @@ final class ProjectModel {
     var errorMessage: String?
     /// Item currently being renamed inline, or a pending new item name prompt.
     var renaming: URL?
+    /// Live preview pipeline; fed by the open file's changes.
+    let preview = PreviewModel()
+    /// Asks the editor to move the caret to a position in the open file.
+    private(set) var revealRequest: RevealRequest?
+
+    struct RevealRequest: Equatable {
+        let id = UUID()
+        let line: Int
+        let column: Int
+    }
 
     private var watcher: ProjectWatcher?
     private var accessedRoot: URL?
+    private var previewTask: Task<Void, Never>?
 
     var operations: FileOperations? { project.map(FileOperations.init) }
 
@@ -34,6 +45,7 @@ final class ProjectModel {
             reload()
             startWatching()
             selection = tree.flatMap(Self.flatten).first { !$0.isDirectory }?.url
+            schedulePreview()
         } catch {
             root.stopAccessingSecurityScopedResource()
             report(error)
@@ -53,6 +65,9 @@ final class ProjectModel {
         watcher?.stop(); watcher = nil
         accessedRoot?.stopAccessingSecurityScopedResource(); accessedRoot = nil
         saveCurrent()
+        previewTask?.cancel(); previewTask = nil
+        preview.reset()
+        revealRequest = nil
         project = nil; tree = []; selection = nil; session = nil
     }
 
@@ -63,6 +78,7 @@ final class ProjectModel {
 
     private func openSession() {
         session?.save()
+        previewTask?.cancel(); previewTask = nil
         session = nil
         openError = nil
         conflictFileName = nil
@@ -81,6 +97,13 @@ final class ProjectModel {
                 }
             }
             session = s
+            // Every change to the open file, starting with its current text, goes to the preview.
+            previewTask = Task { [weak self] in
+                for await text in s.changes() {
+                    guard let self else { return }
+                    self.schedulePreview(text: text)
+                }
+            }
         } catch {
             openError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
@@ -89,6 +112,38 @@ final class ProjectModel {
     func resolveConflict(keepMine: Bool) {
         if keepMine { session?.keepEditorVersion() } else { session?.reloadFromDisk() }
         conflictFileName = nil
+    }
+
+    // MARK: Preview and problems
+
+    /// Path of `url` relative to the sources folder when it is a Swift file the parser reads.
+    private func sourcePath(of url: URL) -> String? {
+        guard let project, url.pathExtension == "swift" else { return nil }
+        let base = project.sourcesURL.standardizedFileURL.path + "/"
+        let path = url.standardizedFileURL.path
+        return path.hasPrefix(base) ? String(path.dropFirst(base.count)) : nil
+    }
+
+    /// Re-renders the preview, using the open file's unsaved text when it is part of the project's sources.
+    func schedulePreview(text: String? = nil) {
+        guard let project else { return }
+        var override: (path: String, text: String)?
+        if let session, let path = sourcePath(of: session.url) { override = (path, text ?? session.text) }
+        preview.requestRender(project: project, override: override)
+    }
+
+    /// Problems in the open file, for underlines and gutter marks in the editor.
+    var openFileDiagnostics: [Diagnostic] {
+        guard let session, let path = sourcePath(of: session.url) else { return [] }
+        return preview.diagnostics.filter { $0.location.file == path }
+    }
+
+    /// Opens the file a problem is in and moves the caret to it.
+    func reveal(_ diagnostic: Diagnostic) {
+        guard let project else { return }
+        let url = project.sourcesURL.appendingPathComponent(diagnostic.location.file).standardizedFileURL
+        if selection?.standardizedFileURL != url { selection = url }
+        revealRequest = RevealRequest(line: diagnostic.location.line, column: diagnostic.location.column)
     }
 
     // MARK: File operations
@@ -141,6 +196,7 @@ final class ProjectModel {
         session?.checkForExternalChange()
         do { tree = try ops.tree() } catch { tree = [] }
         if let sel = selection, !FileManager.default.fileExists(atPath: sel.path) { selection = nil }
+        schedulePreview() // other files may have been added, removed or edited
     }
 
     private func startWatching() {

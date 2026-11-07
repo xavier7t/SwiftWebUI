@@ -1,8 +1,11 @@
 import AppKit
+import SwiftWebUICore
 
 /// Vertical ruler showing line numbers next to an `NSTextView`.
 final class LineNumberRulerView: NSRulerView {
     private weak var textView: NSTextView?
+    /// Lines with problems (1-based), shown as a dot next to the number.
+    var problemLines: [Int: Diagnostic.Severity] = [:] { didSet { if problemLines != oldValue { needsDisplay = true } } }
     private let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
 
     init(textView: NSTextView) {
@@ -52,6 +55,10 @@ final class LineNumberRulerView: NSRulerView {
             let label = "\(number)" as NSString
             let size = label.size(withAttributes: attrs)
             label.draw(at: NSPoint(x: ruleThickness - size.width - 8, y: y + (lineRect.height - size.height) / 2), withAttributes: attrs)
+            if let severity = problemLines[number] {
+                (severity == .error ? NSColor.systemRed : NSColor.systemOrange).setFill()
+                NSBezierPath(ovalIn: NSRect(x: 6, y: y + (lineRect.height - 6) / 2, width: 6, height: 6)).fill()
+            }
             number += 1
             if NSMaxRange(lineRange) >= text.length {
                 // Trailing empty line after a final newline.

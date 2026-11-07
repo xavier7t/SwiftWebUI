@@ -35,7 +35,7 @@ struct MainWindowView: View {
                     .clipped()
                 if showPreview {
                     PaneDivider(width: $previewWidth, minWidth: PaneLayout.previewMin, maxWidth: 1200, edge: .trailing)
-                    PreviewPlaceholderView()
+                    PreviewPane(model: model)
                         .frame(width: pv)
                         .clipped()
                 }
@@ -115,9 +115,16 @@ private struct PaneDivider: View {
 struct EditorPane: View {
     var model: ProjectModel
     var body: some View {
+        VStack(spacing: 0) {
+            editor
+            DiagnosticsPanel(model: model)
+        }
+    }
+
+    @ViewBuilder private var editor: some View {
         Group {
             if let session = model.session {
-                CodeEditorView(session: session)
+                CodeEditorView(session: session, diagnostics: model.openFileDiagnostics, reveal: model.revealRequest)
                     .id(session.url)
                     .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
                     .clipped()
@@ -128,13 +135,6 @@ struct EditorPane: View {
             }
         }
         .background(Color(nsColor: .textBackgroundColor))
-    }
-}
-
-struct PreviewPlaceholderView: View {
-    var body: some View {
-        PlaceholderPane(title: "Preview", subtitle: "Live web preview coming soon", systemImage: "safari")
-            .background(Color(nsColor: .windowBackgroundColor))
     }
 }
 

@@ -18,21 +18,27 @@ public enum ViewTreeBuilder {
 
 public enum ProjectParser {
     /// Reads every `.swift` file under the project's sources folder and builds the entry view's tree.
-    public static func parse(project: Project, fileManager: FileManager = .default) -> ParseResult {
-        var files: [SourceFile] = []
+    /// `overrides` maps a path relative to the sources folder to text that replaces (or adds) that file,
+    /// so unsaved editor contents can be used without writing them to disk.
+    public static func parse(project: Project, fileManager: FileManager = .default,
+                             overrides: [String: String] = [:]) -> ParseResult {
+        var texts: [String: String] = [:]
         var diagnostics: [Diagnostic] = []
         let base = project.sourcesURL.standardizedFileURL.path
         let urls = (fileManager.enumerator(at: project.sourcesURL, includingPropertiesForKeys: nil)?.allObjects as? [URL]) ?? []
-        for url in urls.filter({ $0.pathExtension == "swift" }).sorted(by: { $0.path < $1.path }) {
+        for url in urls.filter({ $0.pathExtension == "swift" }) {
             let relative = String(url.standardizedFileURL.path.dropFirst(base.count + 1))
+            if overrides[relative] != nil { continue }
             if let text = try? String(contentsOf: url, encoding: .utf8) {
-                files.append(SourceFile(path: relative, text: text))
+                texts[relative] = text
             } else {
                 diagnostics.append(Diagnostic(code: .unreadableFile, message: "Could not read “\(relative)”.",
                                               suggestion: "Check that the file is saved as UTF-8 text.",
                                               location: CodeLocation(file: relative, line: 1, column: 1)))
             }
         }
+        for (path, text) in overrides { texts[path] = text }
+        let files = texts.keys.sorted().map { SourceFile(path: $0, text: texts[$0]!) }
         let result = ViewTreeBuilder.build(files: files, entryView: project.manifest.entryView)
         return ParseResult(tree: result.tree, diagnostics: (diagnostics + result.diagnostics).sorted { $0.location < $1.location })
     }

@@ -5,6 +5,10 @@ import SwiftWebUICore
 /// `NSTextView`-backed code editor bound to an `OpenFileSession`.
 struct CodeEditorView: NSViewRepresentable {
     let session: OpenFileSession
+    /// Problems in this file, drawn as underlines and gutter marks.
+    var diagnostics: [Diagnostic] = []
+    /// A request to move the caret, e.g. from the problems list.
+    var reveal: ProjectModel.RevealRequest?
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -57,6 +61,8 @@ struct CodeEditorView: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let textView = scroll.documentView as? NSTextView else { return }
         context.coordinator.attach(textView: textView, session: session)
+        context.coordinator.show(diagnostics)
+        context.coordinator.reveal(reveal)
     }
 
     // MARK: Coordinator
@@ -69,6 +75,9 @@ struct CodeEditorView: NSViewRepresentable {
         private var generation = 0
         private var isApplyingExternalText = false
         private var changeTask: Task<Void, Never>?
+        private var shownDiagnostics: [Diagnostic]?
+        /// Shared across editor instances so a request isn't replayed when the editor is recreated for another file.
+        private static var handledReveal: UUID?
 
         /// Per-file undo history, so switching files keeps each file's undo stack.
         private static var undoManagers: [URL: UndoManager] = [:]
@@ -109,7 +118,75 @@ struct CodeEditorView: NSViewRepresentable {
                 currentUndo?.removeAllActions()
                 tv.setSelectedRange(NSRange(location: 0, length: 0))
             }
+            shownDiagnostics = nil // the layout manager drops temporary attributes when the text is replaced
             fullHighlight(immediately: true)
+        }
+
+        // MARK: Problems
+
+        func show(_ diagnostics: [Diagnostic]) {
+            guard let tv = textView, let layout = tv.layoutManager, diagnostics != shownDiagnostics else { return }
+            shownDiagnostics = diagnostics
+            let ns = tv.string as NSString
+            let full = NSRange(location: 0, length: ns.length)
+            for key in [NSAttributedString.Key.underlineStyle, .underlineColor, .toolTip] {
+                layout.removeTemporaryAttribute(key, forCharacterRange: full)
+            }
+            var marks: [Int: Diagnostic.Severity] = [:]
+            for d in diagnostics {
+                guard let range = Self.range(of: d.location, in: ns) else { continue }
+                let color: NSColor = d.severity == .error ? .systemRed : .systemOrange
+                layout.addTemporaryAttributes([
+                    .underlineStyle: NSUnderlineStyle.single.rawValue | NSUnderlineStyle.patternDot.rawValue,
+                    .underlineColor: color,
+                    .toolTip: d.fullMessage,
+                ], forCharacterRange: range)
+                if marks[d.location.line] != .error { marks[d.location.line] = d.severity }
+            }
+            (tv.enclosingScrollView?.verticalRulerView as? LineNumberRulerView)?.problemLines = marks
+        }
+
+        func reveal(_ request: ProjectModel.RevealRequest?) {
+            guard let request, request.id != Self.handledReveal, let tv = textView else { return }
+            Self.handledReveal = request.id
+            let ns = tv.string as NSString
+            guard let offset = Self.offset(line: request.line, column: request.column, in: ns) else { return }
+            tv.window?.makeFirstResponder(tv)
+            tv.setSelectedRange(NSRange(location: offset, length: 0))
+            tv.scrollRangeToVisible(NSRange(location: offset, length: 0))
+            tv.showFindIndicator(for: NSRange(location: offset, length: min(1, ns.length - offset)))
+        }
+
+        /// UTF-16 offset of a 1-based line and character column, clamped to the line.
+        static func offset(line: Int, column: Int, in ns: NSString) -> Int? {
+            guard line >= 1 else { return nil }
+            var start = 0
+            for _ in 1..<max(line, 1) {
+                let r = ns.lineRange(for: NSRange(location: start, length: 0))
+                if NSMaxRange(r) >= ns.length { return ns.length } // past the end: clamp
+                start = NSMaxRange(r)
+            }
+            let lineRange = ns.lineRange(for: NSRange(location: min(start, ns.length), length: 0))
+            let content = ns.substring(with: lineRange).trimmingCharacters(in: .newlines)
+            var utf16 = 0, col = 1
+            for ch in content {
+                if col >= column { break }
+                utf16 += ch.utf16.count; col += 1
+            }
+            return lineRange.location + utf16
+        }
+
+        /// The identifier at a position, or one character when there isn't one.
+        static func range(of location: CodeLocation, in ns: NSString) -> NSRange? {
+            guard let start = offset(line: location.line, column: location.column, in: ns), ns.length > 0 else { return nil }
+            let lineEnd = NSMaxRange(ns.lineRange(for: NSRange(location: min(start, ns.length - 1), length: 0)))
+            var end = start
+            while end < min(lineEnd, ns.length), let scalar = Unicode.Scalar(ns.character(at: end)),
+                  CharacterSet.alphanumerics.contains(scalar) || scalar == "_" { end += 1 }
+            if end == start { end = min(start + 1, ns.length) }
+            if end == start { return start > 0 ? NSRange(location: start - 1, length: 1) : nil }
+            while end > start, let scalar = Unicode.Scalar(ns.character(at: end - 1)), CharacterSet.newlines.contains(scalar) { end -= 1 }
+            return end > start ? NSRange(location: start, length: end - start) : nil
         }
 
         func textDidChange(_ notification: Notification) {
