@@ -53,6 +53,8 @@ struct CodeEditorView: NSViewRepresentable {
         scroll.hasVerticalRuler = true
         scroll.rulersVisible = true
         scroll.verticalRulerView = LineNumberRulerView(textView: textView)
+        // Text and ruler are changed on the main thread while editing; keep their drawing there too.
+        for view in [scroll, textView, scroll.verticalRulerView!] as [NSView] { view.canDrawConcurrently = false }
 
         context.coordinator.attach(textView: textView, session: session)
         return scroll
