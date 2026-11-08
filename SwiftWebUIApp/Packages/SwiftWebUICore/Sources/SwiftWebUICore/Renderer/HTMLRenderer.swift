@@ -102,6 +102,7 @@ final class HTMLBuilder {
         case "Spacer": base = spacer(node)
         case "List": base = list(node)
         case "ScrollView": base = scrollView(node)
+        case "Color": base = colorView(node)
         case "Text": base = text(node)
         case "Image": base = image(node)
         case "Button": base = button(node)
@@ -257,6 +258,25 @@ final class HTMLBuilder {
         if vertical { content.set("min-height", "100%") }
         content.children = children(node.children, axis: .column).nodes
         el.children = [.element(content)]
+        return el
+    }
+
+    /// A color used as a view fills the space it is given.
+    private func colorView(_ node: ViewNode) -> HTMLElement {
+        var el = HTMLElement(class: "color")
+        el.expandsH = true
+        el.expandsV = true
+        let value: Value
+        if case let first? = node.arguments.first, first.label == nil { value = first.value }
+        else { value = .member(base: "Color", name: "init", arguments: node.arguments) }
+        if let color = Palette.color(value) {
+            el.set("background-color", color)
+        } else {
+            let hint = value.description.split(whereSeparator: { !$0.isLetter }).last.map(String.init)
+                .flatMap { Suggest.closest(to: $0, in: Palette.colorNames) }.map { "Did you mean “.\($0)”?" }
+                ?? "Use a color such as .blue, Color.red or Color(red: 0.1, green: 0.2, blue: 0.3)."
+            warn("“\(value)” isn’t a supported color.", hint, node.location)
+        }
         return el
     }
 

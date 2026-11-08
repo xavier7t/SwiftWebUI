@@ -143,3 +143,39 @@ private func css(_ gradient: String, as usage: String = "Text(\"x\").background(
         for e in Reference.entries where e.name.hasPrefix(".") { #expect(e.snippet.hasPrefix(e.name), "\(e.name)") }
     }
 }
+
+@Suite struct ColorViewTests {
+    private func html(_ body: String) -> (html: String, parse: [Diagnostic], render: [Diagnostic]) {
+        let r = ViewTreeBuilder.build(source: "struct ContentView: View { var body: some View { \(body) } }", entryView: "ContentView")
+        guard let tree = r.tree else { return ("", r.diagnostics, []) }
+        let out = HTMLRenderer.render(tree)
+        return (out.html, r.diagnostics.filter { $0.severity == .error }, out.diagnostics)
+    }
+
+    @Test func colorIsAView() {
+        for (source, css) in [
+            ("Color.blue", "background-color:var(--c-blue)"),
+            ("Color(red: 1, green: 0, blue: 0)", "background-color:rgb(255 0 0)"),
+            ("Color.red.opacity(0.5)", "color-mix(in srgb, var(--c-red) 50%, transparent)"),
+            ("Color.green.frame(width: 50, height: 50).cornerRadius(8)", "background-color:var(--c-green)"),
+            ("ZStack { Color.black; Text(\"Hi\").foregroundColor(.white) }", "background-color:#000000"),
+            ("VStack { Color.red.opacity(0.2).frame(height: 40) }", "var(--c-red) 20%"),
+        ] {
+            let r = html(source)
+            #expect(r.parse.isEmpty && r.render.isEmpty, "\(source): \(r.parse) \(r.render)")
+            #expect(r.html.contains(css), "\(source): \(r.html)")
+            #expect(r.html.contains("class=\"color\""), "\(source)")
+        }
+    }
+
+    @Test func badColorsAreReported() {
+        let r = html("Color.bluee")
+        #expect(r.render.first?.message.contains("isn’t a supported color") == true, "\(r.render)")
+        #expect(r.render.first?.suggestion?.contains("blue") == true)
+    }
+
+    @Test func colorStillWorksAsAValue() {
+        let r = html("Text(\"x\").background(Color.red).foregroundColor(Color.white)")
+        #expect(r.parse.isEmpty && r.render.isEmpty && r.html.contains("var(--c-red)"))
+    }
+}

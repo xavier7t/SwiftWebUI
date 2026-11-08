@@ -20,13 +20,17 @@ enum Gradients {
         "angularGradient": "AngularGradient", "ellipticalGradient": "EllipticalGradient",
     ]
 
+    /// The gradient a value stands for: its kind, and its arguments.
+    static func parts(_ value: Value) -> (kind: String, args: [Argument])? {
+        guard case .member(let base, let name, let args) = value else { return nil }
+        if name == "init", let base, kinds.contains(base) || base == "Gradient" { return (base, args) }
+        if base == nil, let k = staticNames[name] { return (k, args) }
+        return nil
+    }
+
     /// The CSS for `value` when it is a gradient.
     static func css(_ value: Value) -> Outcome {
-        guard case .member(let base, let name, let args) = value else { return .notGradient }
-        let kind: String
-        if name == "init", let base, kinds.contains(base) || base == "Gradient" { kind = base }
-        else if base == nil, let k = staticNames[name] { kind = k }
-        else { return .notGradient }
+        guard let (kind, args) = parts(value) else { return .notGradient }
         return build(kind: kind, args: args)
     }
 

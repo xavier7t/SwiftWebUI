@@ -22,6 +22,7 @@ public enum Reference {
         "List": "List {\n    Text(\"One\")\n    Text(\"Two\")\n    Text(\"Three\")\n}",
         "ScrollView": "ScrollView(.horizontal) {\n    HStack(spacing: 16) {\n        Text(\"One\")\n        Text(\"Two\")\n        Text(\"Three\")\n    }\n}",
         "ForEach": "ForEach([\"One\", \"Two\", \"Three\"], id: \\.self) { name in\n    Text(name)\n}",
+        "Color": "Color.blue\n    .frame(height: 80)",
         "Image": "Image(systemName: \"star.fill\")",
         "Button": "Button(\"Tap me\") { }",
         "LinearGradient": "LinearGradient(colors: [.blue, .purple], startPoint: .top, endPoint: .bottom)\n    .frame(height: 120)",

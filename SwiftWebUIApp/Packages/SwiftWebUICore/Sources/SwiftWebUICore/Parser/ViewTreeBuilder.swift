@@ -93,10 +93,43 @@ private struct StructInfo {
     let properties: [Property]
     let body: CodeBlockItemListSyntax?
     let location: CodeLocation
+    /// Computed properties other than `body`, from the struct and from extensions of it.
+    var computed: [ComputedProperty] = []
+}
+
+/// A computed property of a View struct. View-valued ones (`var header: some View`) are used like views,
+/// the others (`var title: String { … }`) like values.
+private struct ComputedProperty {
+    let name: String
+    let owner: String
+    let isView: Bool
+    let body: CodeBlockItemListSyntax
+    let file: FileContext
+    let location: CodeLocation
+}
+
+/// A `static` property added in an extension, such as `extension Color { static let brand = … }`.
+private struct StaticMember {
+    let expr: ExprSyntax
+    let file: FileContext
+}
+
+/// A custom modifier: `extension View { func card() -> some View { … } }`.
+private struct ModifierFunc {
+    struct Param {
+        let external: String?
+        let name: String
+        let defaultValue: ExprSyntax?
+    }
+    let name: String
+    let params: [Param]
+    let body: CodeBlockItemListSyntax
+    let file: FileContext
 }
 
 private struct Scope {
     var values: [String: Value] = [:]
+    var computed: [String: ComputedProperty] = [:]
 }
 
 private struct CallArgument {
@@ -117,6 +150,11 @@ private final class Builder {
     var visited: Set<String> = []
     var current: FileContext!
     var reportMissing = true
+    /// Static properties from extensions, by type name and property name.
+    var staticMembers: [String: [String: StaticMember]] = [:]
+    var modifierFuncs: [String: ModifierFunc] = [:]
+    var evaluating: Set<String> = []
+    var expansionStack: [String] = []
 
     init(files sources: [SourceFile]) {
         for source in sources {
@@ -125,6 +163,11 @@ private final class Builder {
             current = ctx
             reportSyntaxErrors(ctx)
             collectStructs(ctx)
+        }
+        // Extensions can come before or after the types they extend, so they are read once all types are known.
+        for ctx in files {
+            current = ctx
+            collectExtensions(ctx)
         }
     }
 
@@ -218,13 +261,14 @@ private final class Builder {
     func makeInfo(_ decl: StructDeclSyntax, _ ctx: FileContext) -> StructInfo {
         var properties: [Property] = []
         var body: CodeBlockItemListSyntax?
+        var computed: [ComputedProperty] = []
         for member in decl.memberBlock.members {
             if let variable = member.decl.as(VariableDeclSyntax.self) {
                 if variable.modifiers.contains(where: { $0.name.text == "static" }) { continue }
                 var isState = false
                 for case .attribute(let attr) in variable.attributes {
                     let name = attr.attributeName.trimmedDescription
-                    if name == "State" { isState = true } else {
+                    if name == "State" { isState = true } else if name == "ViewBuilder" { continue } else {
                         add(.unsupportedSyntax, "@\(name) isn’t supported yet.",
                             "Only @State is available in this version. Use a plain property instead.", ctx.location(of: attr))
                     }
@@ -236,10 +280,9 @@ private final class Builder {
                         continue
                     }
                     if let block = binding.accessorBlock {
-                        if name == "body" { body = bodyStatements(block) } else {
-                            add(.unsupportedSyntax, "Computed property “\(name)” isn’t supported.",
-                                "Use a stored property with a literal value, or move the content into its own View struct.",
-                                ctx.location(of: binding))
+                        if name == "body" { body = bodyStatements(block) }
+                        else if let statements = bodyStatements(block) {
+                            computed.append(computedProperty(name, owner: decl.name.text, binding, statements, ctx))
                         }
                         continue
                     }
@@ -251,7 +294,202 @@ private final class Builder {
                     "Only properties and “body” are supported inside a View struct.", ctx.location(of: member.decl), severity: .warning)
             }
         }
-        return StructInfo(name: decl.name.text, file: ctx, properties: properties, body: body, location: ctx.location(of: decl.name))
+        return StructInfo(name: decl.name.text, file: ctx, properties: properties, body: body,
+                          location: ctx.location(of: decl.name), computed: computed)
+    }
+
+    func computedProperty(_ name: String, owner: String, _ binding: PatternBindingSyntax,
+                          _ statements: CodeBlockItemListSyntax, _ ctx: FileContext) -> ComputedProperty {
+        let isView = binding.typeAnnotation?.type.trimmedDescription.contains("View") ?? false
+        return ComputedProperty(name: name, owner: owner, isView: isView, body: statements, file: ctx,
+                                location: ctx.location(of: binding))
+    }
+
+    /// The only expression of a body, written with or without `return`.
+    func singleExpression(_ statements: CodeBlockItemListSyntax) -> ExprSyntax? {
+        guard statements.count == 1, let item = statements.first else { return nil }
+        switch item.item {
+        case .expr(let e): return e
+        case .stmt(let stmt):
+            if let ret = stmt.as(ReturnStmtSyntax.self) { return ret.expression }
+            return stmt.as(ExpressionStmtSyntax.self)?.expression
+        case .decl: return nil
+        }
+    }
+
+    // MARK: Extensions
+
+    func collectExtensions(_ ctx: FileContext) {
+        for item in ctx.tree.statements {
+            guard let ext = item.item.as(ExtensionDeclSyntax.self) else { continue }
+            let written = ext.extendedType.trimmedDescription
+            let type = written.split(separator: ".").last.map(String.init) ?? written
+            let isViewStruct = structs[type] != nil
+            let handlesMembers = isViewStruct || type == "View"
+            for member in ext.memberBlock.members {
+                if let variable = member.decl.as(VariableDeclSyntax.self) {
+                    let isStatic = variable.modifiers.contains { $0.name.text == "static" }
+                    for binding in variable.bindings {
+                        guard let name = binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text else { continue }
+                        if isStatic {
+                            let expr = binding.initializer?.value ?? binding.accessorBlock.flatMap(bodyStatements).flatMap(singleExpression)
+                            guard let expr else {
+                                add(.unsupportedSyntax, "Static property “\(name)” needs a value.",
+                                    "Write it like “static let \(name) = Color.blue”.", ctx.location(of: binding))
+                                continue
+                            }
+                            staticMembers[type, default: [:]][name] = StaticMember(expr: expr, file: ctx)
+                        } else if isViewStruct, let statements = binding.accessorBlock.flatMap(bodyStatements) {
+                            structs[type]?.computed.append(computedProperty(name, owner: type, binding, statements, ctx))
+                        } else if handlesMembers {
+                            add(.unsupportedSyntax, "This declaration is ignored.",
+                                "Extensions can add computed properties to your own views.", ctx.location(of: binding), severity: .warning)
+                        }
+                    }
+                } else if let fn = member.decl.as(FunctionDeclSyntax.self), type == "View" {
+                    if let body = fn.body?.statements { modifierFuncs[fn.name.text] = makeModifierFunc(fn, body, ctx) }
+                } else if handlesMembers {
+                    add(.unsupportedSyntax, "This declaration is ignored.",
+                        "Extensions of View can add custom modifiers: func card() -> some View { self.padding() }.",
+                        ctx.location(of: member.decl), severity: .warning)
+                }
+            }
+        }
+    }
+
+    func makeModifierFunc(_ fn: FunctionDeclSyntax, _ body: CodeBlockItemListSyntax, _ ctx: FileContext) -> ModifierFunc {
+        let params = fn.signature.parameterClause.parameters.map { p -> ModifierFunc.Param in
+            let first = p.firstName.text
+            return ModifierFunc.Param(external: first == "_" ? nil : first, name: p.secondName?.text ?? first,
+                                      defaultValue: p.defaultValue?.value)
+        }
+        return ModifierFunc(name: fn.name.text, params: params, body: body, file: ctx)
+    }
+
+    /// The value of a computed property, evaluated where it is used.
+    func evalComputed(_ c: ComputedProperty, _ scope: Scope, at node: some SyntaxProtocol) -> Value? {
+        let key = "\(c.owner).\(c.name)"
+        guard !evaluating.contains(key) else {
+            add(.circularReference, "“\(c.name)” uses its own value.", "A computed property can’t refer to itself.", loc(node))
+            return nil
+        }
+        evaluating.insert(key)
+        defer { evaluating.remove(key) }
+        let saved = current
+        current = c.file
+        defer { current = saved }
+        guard let expr = singleExpression(c.body) else {
+            add(.unsupportedSyntax, "Computed property “\(c.name)” must be a single expression.",
+                "Write it like “var title: String { \"Hello\" }”, or make it a view with “some View”.", c.location)
+            return nil
+        }
+        return eval(expr, scope)
+    }
+
+    func staticMember(_ type: String?, _ name: String) -> StaticMember? {
+        if let type { return staticMembers[type]?[name] }
+        for key in staticMembers.keys.sorted() { if let m = staticMembers[key]?[name] { return m } }
+        return nil
+    }
+
+    func evalStatic(_ member: StaticMember, named name: String, at node: some SyntaxProtocol) -> Value? {
+        let key = "static.\(name)"
+        guard !evaluating.contains(key) else {
+            add(.circularReference, "“\(name)” uses its own value.", "A static property can’t refer to itself.", loc(node))
+            return nil
+        }
+        evaluating.insert(key)
+        defer { evaluating.remove(key) }
+        let saved = current
+        current = member.file
+        defer { current = saved }
+        return eval(member.expr, Scope())
+    }
+
+    /// Applies a custom modifier by substituting its arguments into the built-in modifiers it chains.
+    func expandModifier(_ fn: ModifierFunc, call: FunctionCallExprSyntax, at nameNode: some SyntaxProtocol, _ scope: Scope) -> [ModifierNode] {
+        let at = loc(nameNode)
+        guard expansionStack.count < 16, !expansionStack.contains(fn.name) else {
+            add(.circularReference, "“.\(fn.name)” uses itself.", "A custom modifier can’t call itself.", at)
+            return []
+        }
+        if let closure = call.trailingClosure {
+            unsupported(closure, "“.\(fn.name)” can’t take a closure.", "Pass values as arguments instead.")
+            return []
+        }
+        func label(_ p: ModifierFunc.Param) -> String { p.external ?? p.name }
+        var local = Scope()
+        var filled = Set<Int>()
+        var ok = true
+        for arg in call.arguments {
+            let index: Int?
+            if let l = arg.label?.text { index = fn.params.firstIndex { $0.external == l } }
+            else { index = fn.params.indices.first { fn.params[$0].external == nil && !filled.contains($0) } }
+            guard let i = index, !filled.contains(i) else {
+                let names = fn.params.map(label).joined(separator: ", ")
+                add(.unknownArgument, "“.\(fn.name)” doesn’t take this argument.",
+                    names.isEmpty ? "It takes no arguments." : "Available: \(names).", loc(arg))
+                ok = false
+                continue
+            }
+            filled.insert(i)
+            if let v = eval(arg.expression, scope) { local.values[fn.params[i].name] = v } else { ok = false }
+        }
+        let saved = current
+        current = fn.file
+        defer { current = saved }
+        for (i, p) in fn.params.enumerated() where !filled.contains(i) {
+            if let d = p.defaultValue {
+                if let v = eval(d, local) { local.values[p.name] = v } else { ok = false }
+            } else {
+                current = saved
+                add(.missingArgument, "“.\(fn.name)” needs a value for “\(label(p))”.", "Write it like .\(fn.name)(\(label(p)): …).", at)
+                current = fn.file
+                ok = false
+            }
+        }
+        guard ok else { return [] }
+        guard let expr = singleExpression(fn.body) else {
+            add(.unsupportedSyntax, "Custom modifier “\(fn.name)” must be a single expression.",
+                "Write it like “self.padding().background(Color.blue)”.", fn.body.first.map { loc($0) } ?? at)
+            return []
+        }
+        // Walk the chain down to `self` (or an implicit-self call such as `padding(8)`).
+        var chain: [FunctionCallExprSyntax] = []
+        var e: ExprSyntax = expr
+        while true {
+            if let ref = e.as(DeclReferenceExprSyntax.self), ref.baseName.text == "self" { break }
+            guard let c = e.as(FunctionCallExprSyntax.self) else {
+                unsupported(expr, "Custom modifiers can only chain built-in modifiers on self.",
+                            "Write it like “self.padding().background(Color.blue)”.")
+                return []
+            }
+            chain.append(c)
+            if let m = c.calledExpression.as(MemberAccessExprSyntax.self), let base = m.base { e = base; continue }
+            if c.calledExpression.is(DeclReferenceExprSyntax.self) { break }
+            unsupported(expr, "Custom modifiers can only chain built-in modifiers on self.",
+                        "Write it like “self.padding().background(Color.blue)”.")
+            return []
+        }
+        expansionStack.append(fn.name)
+        defer { expansionStack.removeLast() }
+        var result: [ModifierNode] = []
+        for c in chain.reversed() {
+            if let m = c.calledExpression.as(MemberAccessExprSyntax.self) {
+                result += modifiers(named: m.declName.baseName.text, call: c, at: m.declName, local)
+            } else if let ref = c.calledExpression.as(DeclReferenceExprSyntax.self) {
+                result += modifiers(named: ref.baseName.text, call: c, at: ref, local)
+            }
+        }
+        return result
+    }
+
+    /// A built-in modifier, or the modifiers a custom one expands to.
+    func modifiers(named name: String, call: FunctionCallExprSyntax, at nameNode: some SyntaxProtocol, _ scope: Scope) -> [ModifierNode] {
+        if Registry.modifier(named: name) == nil, let fn = modifierFuncs[name] {
+            return expandModifier(fn, call: call, at: nameNode, scope)
+        }
+        return modifier(named: name, call: call, at: nameNode, scope).map { [$0] } ?? []
     }
 
     func bodyStatements(_ block: AccessorBlockSyntax) -> CodeBlockItemListSyntax? {
@@ -297,6 +535,7 @@ private final class Builder {
         }
 
         var scope = Scope()
+        for c in info.computed { scope.computed[c.name] = c }
         for prop in info.properties {
             if prop.isState {
                 guard let expr = prop.defaultValue, let initial = eval(expr, scope) else {
@@ -379,6 +618,12 @@ private final class Builder {
                         "Show the content unconditionally, or split it into separate View structs.")
             return nil
         }
+        // A view-valued computed property, such as `header` or `self.header`.
+        if let c = computedView(named: expr, scope) { return computedViewNode(c, expr, scope, stack, depth) }
+        // `Color.blue` or a gradient constant from an extension is a view on its own.
+        if let member = expr.as(MemberAccessExprSyntax.self), isColorExpression(expr) || isStaticMember(member) {
+            return eval(ExprSyntax(member), scope).flatMap { viewNode(from: $0, at: member) }
+        }
         guard let call = expr.as(FunctionCallExprSyntax.self) else {
             unsupported(expr, "“\(snippet(expr))” isn’t a view.", "Use a view such as Text(\"…\") or VStack { … }.")
             return nil
@@ -388,9 +633,13 @@ private final class Builder {
                 unsupported(call, "“\(snippet(call))” isn’t a view.", "Use a view such as Text(\"…\") or VStack { … }.")
                 return nil
             }
-            let modifier = modifier(named: member.declName.baseName.text, call: call, at: member.declName, scope)
+            // `Color.red.opacity(0.5)` is still a color.
+            if member.declName.baseName.text == "opacity", isColorExpression(base) {
+                return eval(ExprSyntax(call), scope).flatMap { viewNode(from: $0, at: member.declName) }
+            }
+            let added = modifiers(named: member.declName.baseName.text, call: call, at: member.declName, scope)
             guard var node = view(from: base, scope, stack, depth + 1) else { return nil }
-            if let modifier { node.modifiers.append(modifier) }
+            node.modifiers.append(contentsOf: added)
             return node
         }
         if let ref = call.calledExpression.as(DeclReferenceExprSyntax.self) {
@@ -398,6 +647,77 @@ private final class Builder {
         }
         unsupported(call, "“\(snippet(call))” isn’t a view.")
         return nil
+    }
+
+    /// `Color.blue`, `Color(red: …)` or either followed by `.opacity(_)`.
+    func isColorExpression(_ expr: ExprSyntax) -> Bool {
+        if let m = expr.as(MemberAccessExprSyntax.self) {
+            guard let base = m.base else { return false }
+            if let ref = base.as(DeclReferenceExprSyntax.self) { return ref.baseName.text == "Color" && scope0Free(ref) }
+            return false
+        }
+        if let call = expr.as(FunctionCallExprSyntax.self) {
+            if let ref = call.calledExpression.as(DeclReferenceExprSyntax.self) { return ref.baseName.text == "Color" }
+            if let m = call.calledExpression.as(MemberAccessExprSyntax.self), m.declName.baseName.text == "opacity",
+               let base = m.base { return isColorExpression(base) }
+        }
+        return false
+    }
+
+    private func scope0Free(_ ref: DeclReferenceExprSyntax) -> Bool { structs[ref.baseName.text] == nil }
+
+    func colorView(_ value: Value, at node: some SyntaxProtocol) -> ViewNode {
+        var view = ViewNode(kind: "Color", location: loc(node))
+        view.arguments = [Argument(label: nil, value: value)]
+        return view
+    }
+
+    /// `Type.name` where an extension declares `name` on `Type`.
+    private func isStaticMember(_ member: MemberAccessExprSyntax) -> Bool {
+        guard let ref = member.base?.as(DeclReferenceExprSyntax.self) else { return false }
+        return staticMembers[ref.baseName.text]?[member.declName.baseName.text] != nil
+    }
+
+    /// The view a color or gradient value stands for.
+    func viewNode(from value: Value, at node: some SyntaxProtocol) -> ViewNode? {
+        if let g = Gradients.parts(value), Gradients.kinds.contains(g.kind) {
+            var view = ViewNode(kind: g.kind, location: loc(node))
+            view.arguments = g.args
+            return view
+        }
+        switch value {
+        case .member(let base, _, _) where base == nil || base == "Color": return colorView(value, at: node)
+        case .method: return colorView(value, at: node)
+        default:
+            unsupported(node, "“\(snippet(node))” isn’t a view.", "Use a view such as Text(\"…\"), a Color or a gradient.")
+            return nil
+        }
+    }
+
+    private func computedView(named expr: ExprSyntax, _ scope: Scope) -> ComputedProperty? {
+        let name: String
+        if let ref = expr.as(DeclReferenceExprSyntax.self) { name = ref.baseName.text }
+        else if let m = expr.as(MemberAccessExprSyntax.self), m.base?.as(DeclReferenceExprSyntax.self)?.baseName.text == "self" {
+            name = m.declName.baseName.text
+        } else { return nil }
+        guard let c = scope.computed[name], c.isView, scope.values[name] == nil else { return nil }
+        return c
+    }
+
+    private func computedViewNode(_ c: ComputedProperty, _ expr: ExprSyntax, _ scope: Scope, _ stack: [String], _ depth: Int) -> ViewNode? {
+        let marker = "\(c.owner).\(c.name)"
+        guard !stack.contains(marker) else {
+            add(.circularReference, "“\(c.name)” contains itself.", "A view can’t include itself. Remove one of the references.", loc(expr))
+            return nil
+        }
+        let callSite = loc(expr)
+        let saved = current
+        current = c.file
+        defer { current = saved }
+        let nodes = views(in: c.body, scope, stack + [marker], depth + 1)
+        var node = ViewNode(kind: c.name, isCustom: true, location: callSite)
+        node.children = [group(nodes, at: c.location)].compactMap { $0 }
+        return node
     }
 
     func construct(_ name: String, _ call: FunctionCallExprSyntax, _ scope: Scope, _ stack: [String], _ depth: Int) -> ViewNode? {
@@ -682,6 +1002,7 @@ private final class Builder {
         if let ref = expr.as(DeclReferenceExprSyntax.self) {
             let name = ref.baseName.text
             if let v = scope.values[name] { return v }
+            if let c = scope.computed[name], !c.isView { return evalComputed(c, scope, at: ref) }
             let hint = Suggest.closest(to: name, in: Array(scope.values.keys)).map { "Did you mean “\($0)”?" }
                 ?? "Declare it as a property of this struct, e.g. “let \(name) = …” or “@State var \(name) = …”."
             add(.unknownName, "Unknown name “\(name)”.", hint, loc(ref))
@@ -760,10 +1081,18 @@ private final class Builder {
 
     func evalMember(_ m: MemberAccessExprSyntax, _ scope: Scope) -> Value? {
         let name = m.declName.baseName.text
-        guard let base = m.base else { return .member(base: nil, name: name, arguments: []) }
+        guard let base = m.base else {
+            if let s = staticMember(nil, name) { return evalStatic(s, named: name, at: m) }
+            return .member(base: nil, name: name, arguments: [])
+        }
         if let ref = base.as(DeclReferenceExprSyntax.self) {
-            if ref.baseName.text == "self" { return scope.values[name] ?? unknown(name, m) }
+            if ref.baseName.text == "self" {
+                if let v = scope.values[name] { return v }
+                if let c = scope.computed[name], !c.isView { return evalComputed(c, scope, at: m) }
+                return unknown(name, m)
+            }
             if scope.values[ref.baseName.text] == nil, ref.baseName.text.first?.isUppercase == true {
+                if let s = staticMember(ref.baseName.text, name) { return evalStatic(s, named: name, at: m) }
                 return .member(base: ref.baseName.text, name: name, arguments: [])
             }
         }

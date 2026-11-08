@@ -367,7 +367,7 @@ private extension URL {
         }
         """)
         #expect(d.contains { $0.message == "@Binding isn’t supported yet." })
-        #expect(d.contains { $0.message == "Computed property “computed” isn’t supported." })
+        #expect(!d.contains { $0.message.contains("Computed property") }) // computed properties are supported now
         #expect(d.contains { $0.severity == .warning && $0.code == .unsupportedSyntax })
         #expect(d.contains { $0.code == .invalidState })
     }
