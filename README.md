@@ -3,6 +3,7 @@
 A native macOS app for web developers. Write SwiftUI-style code, watch it render as a real web page as you type, then export a static website you can host anywhere.
 
 ![SwiftWebUI example](marketing/example.png)
+[**SwiftWebUI example Swift source code**](marketing/example.swift)
 
 ## How it works
 
