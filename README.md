@@ -109,12 +109,8 @@ SwiftWebUIApp/
       Editor/                  syntax highlighting, indentation, open-file sessions
     Tests/SwiftWebUICoreTests/
 marketing/                     example project and screenshot
-docs/                          MVP1 plan and release notes (local, not tracked)
 ```
 
-## Releasing
-
-Distribution outside the Mac App Store needs a Developer ID certificate and notarization. See `docs/release.md` for the steps.
 
 ## Status
 
