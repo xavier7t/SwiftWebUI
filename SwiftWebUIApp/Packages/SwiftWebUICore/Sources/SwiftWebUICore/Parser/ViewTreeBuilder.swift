@@ -103,6 +103,8 @@ private struct ComputedProperty {
     let name: String
     let owner: String
     let isView: Bool
+    /// Declared as a color or gradient: usable as a view, and also as a value in `.background(_)` and the like.
+    var isShapeStyle = false
     let body: CodeBlockItemListSyntax
     let file: FileContext
     let location: CodeLocation
@@ -300,8 +302,10 @@ private final class Builder {
 
     func computedProperty(_ name: String, owner: String, _ binding: PatternBindingSyntax,
                           _ statements: CodeBlockItemListSyntax, _ ctx: FileContext) -> ComputedProperty {
-        let isView = binding.typeAnnotation?.type.trimmedDescription.contains("View") ?? false
-        return ComputedProperty(name: name, owner: owner, isView: isView, body: statements, file: ctx,
+        let type = binding.typeAnnotation?.type.trimmedDescription ?? ""
+        let isShapeStyle = type == "Color" || type == "Gradient" || Gradients.kinds.contains(type)
+        return ComputedProperty(name: name, owner: owner, isView: type.contains("View") || isShapeStyle,
+                                isShapeStyle: isShapeStyle, body: statements, file: ctx,
                                 location: ctx.location(of: binding))
     }
 
@@ -711,6 +715,14 @@ private final class Builder {
             return nil
         }
         let callSite = loc(expr)
+        if c.isShapeStyle, let value = evalComputed(c, scope, at: expr) {
+            if case .member(let base?, "init", let args) = value, Gradients.kinds.contains(base) {
+                var node = ViewNode(kind: base, location: callSite)
+                node.arguments = args
+                return node
+            }
+            if Palette.color(value) != nil || Gradients.css(value) == .notGradient { return colorView(value, at: expr) }
+        }
         let saved = current
         current = c.file
         defer { current = saved }
@@ -1002,7 +1014,7 @@ private final class Builder {
         if let ref = expr.as(DeclReferenceExprSyntax.self) {
             let name = ref.baseName.text
             if let v = scope.values[name] { return v }
-            if let c = scope.computed[name], !c.isView { return evalComputed(c, scope, at: ref) }
+            if let c = scope.computed[name], !c.isView || c.isShapeStyle { return evalComputed(c, scope, at: ref) }
             let hint = Suggest.closest(to: name, in: Array(scope.values.keys)).map { "Did you mean “\($0)”?" }
                 ?? "Declare it as a property of this struct, e.g. “let \(name) = …” or “@State var \(name) = …”."
             add(.unknownName, "Unknown name “\(name)”.", hint, loc(ref))
@@ -1088,7 +1100,7 @@ private final class Builder {
         if let ref = base.as(DeclReferenceExprSyntax.self) {
             if ref.baseName.text == "self" {
                 if let v = scope.values[name] { return v }
-                if let c = scope.computed[name], !c.isView { return evalComputed(c, scope, at: m) }
+                if let c = scope.computed[name], !c.isView || c.isShapeStyle { return evalComputed(c, scope, at: m) }
                 return unknown(name, m)
             }
             if scope.values[ref.baseName.text] == nil, ref.baseName.text.first?.isUppercase == true {
